@@ -1,1 +1,73 @@
 
+import berserk
+import chess
+import chess.engine
+import time
+
+# ===== CONFIGURATION – EDIT THESE TWO LINES =====
+TOKEN = "lip_xxxxxxxxxxxxxxxxxxxx"   # your bot token
+STOCKFISH_PATH = "/usr/local/bin/stockfish"   # full path to stockfish
+# ================================================
+
+# 1. Connect to Lichess
+session = berserk.TokenSession(TOKEN)
+client = berserk.Client(session)
+print(f"✅ Logged in as {client.account.get()['username']} (BOT)")
+
+# 2. Start Stockfish engine with 2500 Elo settings
+transport, engine = chess.engine.popen_uci(STOCKFISH_PATH)
+
+# ----- 2500 Elo configuration -----
+# Stockfish Skill Level 0..20 → roughly 1350..3200 Elo.
+# Level 12 ≈ 2500, Level 13 ≈ 2600. We use 12 for solid 2500.
+engine.configure({
+    "Skill Level": 12,
+    "Move Overhead": 100,    # avoid time losses
+    "Threads": 2,           # use 2 CPU threads
+    "Hash": 128             # 128 MB hash
+})
+print("♟️ Stockfish configured to ~2500 Elo (Skill Level 12)")
+
+# 3. Accept challenges automatically
+client.bots.accept_all_challenges()
+
+print("🤖 Bot is ready! Waiting for challenges...")
+
+# 4. Main loop: watch ongoing games and play moves
+while True:
+    try:
+        games = client.bots.get_ongoing_games()
+        for game in games:
+            game_id = game['gameId']
+            print(f"⚔️ Playing game {game_id}")
+
+            # Get full game state
+            stream = client.bots.stream_game_state(game_id)
+            board = chess.Board()
+            my_turn = False
+
+            for event in stream:
+                if event['type'] == 'gameState':
+                    moves = event['moves'].split()
+                    # Update board
+                    for move in moves:
+                        board.push_uci(move)
+
+                    # Is it our turn?
+                    if (board.turn == chess.WHITE and game['white']['id'] == client.account.get()['username']) or \
+                       (board.turn == chess.BLACK and game['black']['id'] == client.account.get()['username']):
+                        # Engine search – limit strength to 2500 by time
+                        # 0.1s + increment keeps it at ~2500; adjust if needed
+                        limit = chess.engine.Limit(time=0.1, white_clock=event.get('wtime'), black_clock=event.get('btime'))
+                        result = engine.play(board, limit)
+                        if result.move:
+                            client.bots.make_move(game_id, result.move.uci())
+                            board.push(result.move)
+                    # Check if game ended
+                    if event['status'] != 'started':
+                        print(f"🏁 Game over: {event['status']}")
+                        break
+        time.sleep(1)  # wait before polling again
+    except Exception as e:
+        print(f"⚠️ Error: {e}")
+        time.sleep(5)
